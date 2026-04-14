@@ -1,0 +1,58 @@
+Title:        Pass-the-Hash — NTLM Lateral Movement
+MITRE ID:     T1550.002 (https://attack.mitre.org/techniques/T1550/002/)
+Tactic:       Lateral Movement
+Severity:     High
+Data Source:  wineventlog
+Event IDs:    4624 (Logon Success), 4625 (Logon Failure), 4672 (Special Privileges)
+Description:  Detects pass-the-hash attacks by identifying network logons (Type 3)
+              using NTLMv2 authentication from a source where the user has no prior
+              interactive session. The absence of a corresponding Type 2 logon from
+              the same source is a strong indicator of hash-based authentication
+              rather than a legitimate credential logon.
+              Validated against CrackMapExec PtH from Kali Linux in ad.lab lab
+              using harvested NTLM hash from Mimikatz output.
+
+--- SEARCH ---
+
+index=windows EventCode=4624 Logon_Type=3 Authentication_Package=NTLM
+| eval src_host=lower(Workstation_Name)
+| eval user=lower(Account_Name)
+| where user!="anonymous logon" AND user!="" AND NOT like(user, "%$")
+| join type=left src_host [
+    search index=windows EventCode=4624 Logon_Type=2
+    | eval src_host=lower(ComputerName)
+    | eval user=lower(Account_Name)
+    | stats count as interactive_sessions by src_host, user
+]
+| where isnull(interactive_sessions)
+| eval alert="Potential Pass-the-Hash — NTLM Network Logon with No Interactive Session"
+| eval severity="High"
+| table _time, src_host, ComputerName, user, Logon_Type, Authentication_Package, alert, severity
+
+--- TUNING NOTES ---
+
+False Positives:
+- Service accounts that legitimately authenticate over the network without
+  interactive sessions (suppress by known service account names)
+- Scheduled tasks running under domain user context
+- Backup agents and monitoring tools using NTLM
+
+Suppression Example:
+| where NOT user IN ("svc-backup", "svc-splunk", "svc-monitor")
+
+Confidence Booster:
+Combine with EID 4672 (special privileges assigned post-logon) to elevate
+severity — PtH to a privileged account is higher risk than standard user:
+
+index=windows EventCode=4672
+| join Logon_ID [
+    search index=windows EventCode=4624 Logon_Type=3 Authentication_Package=NTLM
+]
+| eval alert="Pass-the-Hash — Privileged Account NTLM Logon"
+| eval severity="Critical"
+
+Key Context:
+- Logon Type 3 = Network logon (required for PtH)
+- NTLMv2 = Hash-based authentication protocol
+- No preceding Type 2 = no interactive session = user not physically logged in
+- Sysmon EID 3 (network connection) from source to SMB port 445 strengthens confidence

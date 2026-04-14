@@ -1,0 +1,48 @@
+Title:        New Local Admin Account Created
+MITRE ID:     T1136.001 (https://attack.mitre.org/techniques/T1136/001/)
+Tactic:       Persistence
+Severity:     High
+Data Source:  wineventlog
+Event IDs:    4720 (User Account Created), 4732 (Member Added to Security-Enabled Local Group)
+Description:  Detects creation of a new local user account followed by addition to
+              the local Administrators group. Attackers with elevated access commonly
+              create backdoor accounts to maintain persistent administrative access
+              even if their primary access method is discovered and removed.
+              Validated against Boogeyman 3 campaign — accounts shion and shuna
+              created on CEO workstation after SYSTEM access was achieved.
+
+--- SEARCH ---
+
+index=windows (EventCode=4720 OR EventCode=4732)
+| eval event_type=case(EventCode="4720", "Account Created", EventCode="4732", "Added to Admin Group", true(), "Unknown")
+| stats values(event_type) as events values(Member_Security_ID) as sids
+    count by _time, host, Subject_Account_Name, Sam_Account_Name
+| where mvcount(events) >= 1
+| eval alert="New Local Account Created — Possible Backdoor Account"
+| eval severity="High"
+| table _time, host, Subject_Account_Name, Sam_Account_Name, events, alert, severity
+
+--- TUNING NOTES ---
+
+False Positives:
+- IT-provisioned accounts during onboarding (correlate with change tickets)
+- Automated provisioning systems (suppress by Subject_Account_Name for known service accounts)
+
+High-Fidelity Variant — correlates creation AND admin group addition:
+index=windows EventCode=4720
+| rename Sam_Account_Name as new_account
+| join new_account [
+    search index=windows EventCode=4732 Group_Name="Administrators"
+    | rename Member_Account_Name as new_account
+    | stats count by new_account
+]
+| eval alert="New Account Created AND Added to Administrators — High Confidence Backdoor"
+| eval severity="Critical"
+| table _time, host, new_account, alert, severity
+
+Key Context:
+- EID 4720 alone = account created (Medium confidence)
+- EID 4720 + 4732 (Administrators) within short window = High confidence backdoor
+- Look for unusual Subject_Account_Name — the account doing the creating
+  should be a known admin or provisioning account
+- Accounts created outside business hours warrant immediate investigation

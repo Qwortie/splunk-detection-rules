@@ -1,0 +1,49 @@
+Title:        Kerberoasting — RC4 Service Ticket Requested
+MITRE ID:     T1558.003 (https://attack.mitre.org/techniques/T1558/003/)
+Tactic:       Credential Access
+Severity:     High
+Data Source:  wineventlog
+Event IDs:    4769 (Kerberos Service Ticket Requested)
+Description:  Detects Kerberoasting by identifying Kerberos service ticket requests
+              using RC4-HMAC encryption (0x17). Modern Active Directory environments
+              should only issue AES-encrypted tickets (0x12 / 0x11). RC4 ticket
+              requests are a strong indicator that an attacker is requesting tickets
+              for offline cracking using tools such as Impacket GetUserSPNs or Rubeus.
+              Validated against Impacket GetUserSPNs targeting ad.lab.
+
+--- SEARCH ---
+
+index=windows EventCode=4769
+| where Ticket_Encryption_Type="0x17"
+| where NOT Service_Name="krbtgt"
+| where NOT like(Service_Name, "%$")
+| stats count values(Service_Name) as services_targeted
+    by _time, Account_Name, Client_Address
+| eval alert="Kerberoasting — RC4 Service Ticket Requested"
+| eval severity="High"
+| table _time, Account_Name, Client_Address, count, services_targeted, alert, severity
+
+--- TUNING NOTES ---
+
+False Positives:
+- Legacy applications that only support RC4 encryption
+  (identify by Service_Name and add to allowlist)
+- Older Windows clients that default to RC4
+  (enforce AES-only via GPO: Network Security: Configure encryption types
+   allowed for Kerberos — disable RC4_HMAC_MD5)
+
+Suppression Example:
+| where NOT Service_Name IN ("legacy-app-svc", "old-print-svc")
+
+Hardening Recommendation:
+- Enforce AES-only Kerberos via Group Policy to eliminate RC4 as a
+  valid encryption type — this removes the attack surface entirely
+- Ensure all service accounts have strong passwords (25+ chars) to
+  resist offline cracking even if tickets are obtained
+- Mark sensitive service accounts as "Account is sensitive and cannot
+  be delegated" in Active Directory
+
+Key Context:
+- Ticket_Encryption_Type 0x17 = RC4-HMAC (weak, crackable offline)
+- Ticket_Encryption_Type 0x12 = AES256-CTS-HMAC-SHA1 (strong)
+- Ticket_Encryption_Type 0x11 = AES128-CTS-HMAC-SHA1 (acceptable)

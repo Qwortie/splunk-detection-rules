@@ -1,0 +1,50 @@
+Title:        LNK Payload Execution via PowerShell IEX
+MITRE ID:     T1059.001 (https://attack.mitre.org/techniques/T1059/001/)
+Tactic:       Persistence / Execution
+Severity:     High
+Data Source:  sysmon
+Event IDs:    1 (Process Creation), 11 (File Created)
+Description:  Detects LNK (Windows Shortcut) files spawning PowerShell with IEX
+              (Invoke-Expression) or download cradles. LNK files are commonly used
+              as phishing payloads delivered inside password-protected ZIP archives
+              to bypass email gateway scanning. When opened, the LNK executes an
+              encoded PowerShell command that downloads and runs a stage 2 payload.
+              Validated against Boogeyman 1 campaign — Invoice_20230103.lnk
+              executing encoded IEX download cradle to files.bpakcaging[.]xyz.
+
+--- SEARCH ---
+
+index=sysmon EventCode=1
+| where (like(ParentCommandLine, "%.lnk%")
+    OR like(CommandLine, "%IEX%")
+    OR like(CommandLine, "%iex%")
+    OR like(CommandLine, "%Invoke-Expression%"))
+    AND (like(Image, "%powershell.exe%") OR like(Image, "%pwsh.exe%"))
+| eval alert="LNK Payload — PowerShell IEX Execution Detected"
+| eval severity="High"
+| table _time, host, User, Image, CommandLine, ParentImage, ParentCommandLine, alert, severity
+
+--- TUNING NOTES ---
+
+False Positives:
+- Legitimate PowerShell scripts launched from shortcuts on the desktop
+  (suppress by known ParentCommandLine paths and trusted script locations)
+- Software installers that use LNK shortcuts with PowerShell bootstrappers
+
+Suppression Example:
+| where NOT like(ParentCommandLine, "%C:\\ProgramData\\trusted-app%")
+
+LNK File Creation Detection (complementary rule):
+index=sysmon EventCode=11
+| where like(TargetFilename, "%.lnk%")
+    AND (like(TargetFilename, "%Downloads%")
+    OR like(TargetFilename, "%AppData%")
+    OR like(TargetFilename, "%Temp%"))
+| eval alert="LNK File Created in Suspicious Location"
+| table _time, host, User, TargetFilename, Image, alert
+
+Key Indicators:
+- LNK files arriving via email or browser (Downloads folder)
+- Password-protected ZIP containing only an LNK file
+- LNK CommandLine contains encoded base64 strings (-EncodedCommand or IEX)
+- Child process of explorer.exe spawning PowerShell with network activity

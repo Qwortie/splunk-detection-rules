@@ -1,0 +1,54 @@
+Title:        Scheduled Task Creation — Persistence
+MITRE ID:     T1053.005 (https://attack.mitre.org/techniques/T1053/005/)
+Tactic:       Persistence
+Severity:     Medium
+Data Source:  wineventlog, sysmon
+Event IDs:    4698 (Scheduled Task Created), 1 (Process Creation — schtasks.exe)
+Description:  Detects scheduled task creation as a persistence mechanism. Attackers
+              commonly use schtasks.exe or the Task Scheduler API to establish
+              persistent execution of malicious binaries or scripts at login,
+              startup, or scheduled intervals. Flags tasks created pointing to
+              non-standard binary locations or using suspicious execution patterns.
+              Validated against Boogeyman campaign (TempestUpdate2 service) and
+              Boogeyman 2 (Updater task with registry-stored payload) in ad.lab.
+
+--- SEARCH ---
+
+( index=windows EventCode=4698 )
+OR
+( index=sysmon EventCode=1 Image="*schtasks.exe*" CommandLine="*/create*" )
+| eval task_name=coalesce(TaskName, mvindex(split(CommandLine, "/TN "), 1))
+| eval task_path=coalesce(TaskContent, CommandLine)
+| where NOT like(task_path, "%\\Windows\\%")
+    AND NOT like(task_path, "%\\Microsoft\\%")
+| where NOT like(task_path, "%\\Program Files\\%")
+| eval alert="Scheduled Task Created — Non-Standard Binary Path"
+| eval severity="Medium"
+| table _time, host, User, task_name, task_path, alert, severity
+
+--- TUNING NOTES ---
+
+False Positives:
+- Legitimate software installers that create scheduled tasks (antivirus updates,
+  backup agents, software update managers)
+  (suppress by known vendor paths and task names)
+- IT-managed tasks deployed via GPO
+  (maintain an allowlist of approved task names)
+
+Suppression Example:
+| where NOT task_name IN ("GoogleUpdateTaskMachine", "Adobe Acrobat Update Task")
+
+High-Fidelity Variant (schtasks only — flags hidden execution flags):
+index=sysmon EventCode=1 Image="*schtasks.exe*"
+| where like(CommandLine, "*/create*")
+    AND (like(CommandLine, "*powershell*") OR like(CommandLine, "*cmd*")
+    OR like(CommandLine, "*wscript*") OR like(CommandLine, "*hidden*"))
+| eval alert="Scheduled Task — Suspicious Execution Method"
+| table _time, host, User, CommandLine, ParentImage, alert
+
+Key Indicators of Malicious Tasks:
+- Task binary in %APPDATA%, %TEMP%, %PUBLIC%, or %PROGRAMDATA%
+- Task runs PowerShell with encoded commands or -hidden flag
+- Task created by a non-administrative user account
+- Task name mimics legitimate Windows tasks (e.g. "WindowsUpdate")
+- Parent process of schtasks.exe is unusual (e.g. winword.exe, wscript.exe)

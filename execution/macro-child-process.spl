@@ -1,0 +1,50 @@
+Title:        Office Application Spawning Suspicious Child Process
+MITRE ID:     T1059.005 (https://attack.mitre.org/techniques/T1059/005/)
+Tactic:       Execution
+Severity:     High
+Data Source:  sysmon
+Event IDs:    1 (Process Creation)
+Description:  Detects Microsoft Office applications (Word, Excel, PowerPoint) spawning
+              command interpreters or scripting hosts — a strong indicator of VBA macro
+              execution from a malicious document. Legitimate Office usage rarely
+              requires spawning cmd.exe, PowerShell, or wscript.exe as child processes.
+              Validated against Boogeyman 2 campaign — Resume_WesleyTaylor.doc macro
+              spawning wscript.exe (PID 4260) to execute update.js stage 2 payload.
+
+--- SEARCH ---
+
+index=sysmon EventCode=1
+| where (like(ParentImage, "%WINWORD.EXE%")
+    OR like(ParentImage, "%EXCEL.EXE%")
+    OR like(ParentImage, "%POWERPNT.EXE%")
+    OR like(ParentImage, "%MSACCESS.EXE%"))
+AND (like(Image, "%cmd.exe%")
+    OR like(Image, "%powershell.exe%")
+    OR like(Image, "%pwsh.exe%")
+    OR like(Image, "%wscript.exe%")
+    OR like(Image, "%cscript.exe%")
+    OR like(Image, "%mshta.exe%")
+    OR like(Image, "%rundll32.exe%")
+    OR like(Image, "%regsvr32.exe%"))
+| eval alert="Office Application Spawned Suspicious Child Process — Possible Macro Execution"
+| eval severity="High"
+| table _time, host, User, ParentImage, Image, CommandLine, alert, severity
+
+--- TUNING NOTES ---
+
+False Positives:
+- Legitimate macros in internal business documents that run approved scripts
+  (document these and suppress by known CommandLine patterns or script paths)
+- Some PDF converters launch via Office intermediary
+  (suppress by known tool paths)
+
+Attack Surface Reduction (ASR) Rule — Recommended Mitigation:
+Enable ASR rule: "Block Office applications from creating child processes"
+GUID: d4f940ab-401b-4efc-aadc-ad5f3c50688a
+This prevents the attack at source rather than detecting it after the fact.
+
+Key Indicators:
+- CommandLine contains encoded strings (-EncodedCommand, base64)
+- Child process connects to the network immediately after spawning (Sysmon EID 3)
+- Parent document path is in Downloads, Temp, or email cache directory
+- Child process drops a file to disk (Sysmon EID 11) in a suspicious location

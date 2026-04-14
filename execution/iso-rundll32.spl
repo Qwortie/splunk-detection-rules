@@ -1,0 +1,50 @@
+Title:        ISO Mount + rundll32 DLL Execution
+MITRE ID:     T1218.011 (https://attack.mitre.org/techniques/T1218/011/)
+Tactic:       Execution
+Severity:     High
+Data Source:  sysmon
+Event IDs:    1 (Process Creation)
+Description:  Detects rundll32.exe executing a DLL from a removable or virtual drive
+              path (D:\ through Z:\) — a pattern associated with ISO-based phishing
+              payloads. ISO containers bypass Windows Mark-of-the-Web (MoTW) protections
+              because files extracted from ISOs do not inherit the Zone.Identifier
+              Alternate Data Stream that would normally trigger SmartScreen warnings.
+              Validated against Boogeyman 3 campaign — review.dat DLL loaded via
+              rundll32 from ISO mount point on CEO workstation.
+
+--- SEARCH ---
+
+index=sysmon EventCode=1 Image="*rundll32.exe*"
+| where match(CommandLine, "[D-Z]:\\\\.*\\.dll")
+    AND NOT match(CommandLine, "C:\\\\Windows\\\\")
+    AND NOT match(CommandLine, "C:\\\\Program Files")
+| eval alert="rundll32 Executing DLL from Non-System Drive — Possible ISO Payload"
+| eval severity="High"
+| table _time, host, User, CommandLine, ParentImage, ParentCommandLine, alert, severity
+
+--- TUNING NOTES ---
+
+False Positives:
+- Legitimate software on mapped network drives or removable media
+  (suppress by known DLL names and paths on managed drives)
+- USB-based enterprise deployment tools
+  (correlate with known deployment tool parent processes)
+
+Suppression Example:
+| where NOT like(CommandLine, "%\\\\trusted-deployment\\\\%")
+
+Complementary Detection — ISO File Creation:
+index=sysmon EventCode=11
+| where like(TargetFilename, "%.iso%")
+    AND (like(TargetFilename, "%Downloads%") OR like(TargetFilename, "%Temp%"))
+| eval alert="ISO File Downloaded — Monitor for Subsequent Mount and Execution"
+| table _time, host, User, TargetFilename, Image, alert
+
+Key Context:
+- ISO MoTW bypass is increasingly used to replace macro-based delivery
+  after Microsoft disabled macros by default in Office (2022)
+- Common DLL export names used by attackers: DllRegisterServer, DllInstall
+- Parent process of rundll32 being explorer.exe with a non-C: path is
+  a high-confidence indicator (user double-clicked from ISO mount)
+- Sysmon EID 3 (network connection) from rundll32 immediately after
+  execution confirms C2 establishment

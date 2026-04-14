@@ -1,0 +1,55 @@
+Title:        PowerShell Encoded Command Execution
+MITRE ID:     T1059.001 (https://attack.mitre.org/techniques/T1059/001/)
+Tactic:       Defense Evasion / Execution
+Severity:     High
+Data Source:  sysmon
+Event IDs:    1 (Process Creation)
+Description:  Detects PowerShell launched with encoded command flags (-EncodedCommand,
+              -enc, -e) used to obfuscate malicious payloads from casual inspection
+              and string-based detection. Encoded commands are a near-universal
+              technique across phishing payloads, fileless malware, and post-exploitation
+              frameworks. Validated across multiple campaigns — Tempest (Follina MSDT
+              payload), Boogeyman 1 (LNK IEX cradle), and Boogeyman 2 (fileless
+              registry payload decoded at runtime).
+
+--- SEARCH ---
+
+index=sysmon EventCode=1
+| where like(Image, "%powershell.exe%") OR like(Image, "%pwsh.exe%")
+| where like(CommandLine, "%-EncodedCommand%")
+    OR like(CommandLine, "%-enc %")
+    OR like(CommandLine, "%-e %")
+    OR like(CommandLine, "%-ec %")
+| eval hidden=if(like(CommandLine, "%-w hidden%") OR like(CommandLine, "%-WindowStyle Hidden%"), "Yes", "No")
+| eval non_interactive=if(like(CommandLine, "%-NonI%") OR like(CommandLine, "%-noni%"), "Yes", "No")
+| eval alert="Encoded PowerShell Execution Detected"
+| eval severity=if(hidden="Yes" AND non_interactive="Yes", "Critical", "High")
+| table _time, host, User, CommandLine, ParentImage, hidden, non_interactive, alert, severity
+
+--- TUNING NOTES ---
+
+False Positives:
+- Some legitimate enterprise software uses encoded PowerShell for deployment
+  (suppress by known ParentImage paths for trusted software)
+- SCCM / Intune management tools
+  (filter by known management process parent images)
+
+Suppression Example:
+| where NOT like(ParentImage, "%\\CCM\\%")
+| where NOT like(ParentImage, "%\\IntuneManagementExtension%")
+
+Severity Escalation Logic:
+- Encoded only                        = High
+- Encoded + hidden window             = High
+- Encoded + hidden + non-interactive  = Critical (strongly indicates malware)
+
+PowerShell Script Block Logging Recommendation:
+Enable EID 4104 (Script Block Logging) via GPO to capture the decoded content
+of encoded commands at execution time:
+Computer Config → Admin Templates → Windows Components →
+Windows PowerShell → Turn on PowerShell Script Block Logging → Enabled
+
+This allows you to search the decoded payload directly:
+index=windows EventCode=4104
+| search ScriptBlockText="*IEX*" OR ScriptBlockText="*Invoke-Expression*"
+| table _time, host, User, ScriptBlockText

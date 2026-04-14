@@ -1,0 +1,56 @@
+Title:        Mimikatz — LSASS Memory Access
+MITRE ID:     T1003.001 (https://attack.mitre.org/techniques/T1003/001/)
+Tactic:       Credential Access
+Severity:     Critical
+Data Source:  sysmon
+Event IDs:    10 (Process Access — LSASS), 1 (Process Creation)
+Description:  Detects attempts to read LSASS process memory — the primary technique
+              used by Mimikatz and similar credential dumping tools to extract
+              plaintext passwords, NTLM hashes, and Kerberos tickets from memory.
+              Sysmon Event ID 10 logs process access events when one process opens
+              a handle to another. LSASS access from non-system processes with
+              suspicious access rights is a high-confidence indicator.
+              Validated against Mimikatz sekurlsa::logonpasswords in ad.lab.
+
+--- SEARCH ---
+
+index=sysmon EventCode=10 TargetImage="*lsass.exe*"
+| where NOT match(SourceImage, "(?i)(antivirus|defender|svchost|csrss|wininit|services|lsass|winlogon|taskmgr)")
+| where NOT SourceUser="NT AUTHORITY\\SYSTEM"
+| eval granted_access=tonumber(GrantedAccess, 16)
+| where (granted_access=0x1010) OR (granted_access=0x1410)
+    OR (granted_access=0x147a) OR (granted_access=0x143a)
+| eval alert="LSASS Memory Access — Possible Credential Dumping"
+| eval severity="Critical"
+| table _time, host, SourceImage, SourceUser, TargetImage, GrantedAccess, alert, severity
+
+--- TUNING NOTES ---
+
+False Positives:
+- Antivirus and EDR products legitimately access LSASS for monitoring
+  (exclude by SourceImage path — known AV install directories)
+- Windows Defender credential guard processes
+- Task Manager when viewing process details (filter SourceImage=taskmgr.exe)
+
+Suppression Example:
+| where NOT like(SourceImage, "%\\Windows Defender\\%")
+| where NOT like(SourceImage, "%\\CrowdStrike\\%")
+
+Access Rights Reference (common Mimikatz values):
+- 0x1010 = PROCESS_VM_READ | PROCESS_QUERY_LIMITED_INFORMATION
+- 0x1410 = PROCESS_VM_READ | PROCESS_QUERY_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION
+- 0x143a = Multiple read/query rights — classic Mimikatz pattern
+- 0x147a = Multiple read/query rights — Mimikatz variant
+
+Hardening Recommendations:
+- Enable Windows Credential Guard (virtualisation-based security)
+  to prevent LSASS from storing recoverable credentials in memory
+- Enable RunAsPPL (Protected Process Light) for LSASS
+  via registry: HKLM\SYSTEM\CurrentControlSet\Control\Lsa\RunAsPPL = 1
+- These mitigations prevent Mimikatz from reading LSASS even with admin rights
+
+Sysmon Config Requirement:
+- Sysmon config must include ProcessAccess targeting lsass.exe:
+  <ProcessAccess onmatch="include">
+    <TargetImage condition="end with">lsass.exe</TargetImage>
+  </ProcessAccess>

@@ -1,0 +1,54 @@
+Title:        certutil Used as File Downloader (LOLBAS)
+MITRE ID:     T1218.007 (https://attack.mitre.org/techniques/T1218/007/)
+Tactic:       Defense Evasion
+Severity:     Medium
+Data Source:  sysmon
+Event IDs:    1 (Process Creation)
+Description:  Detects certutil.exe being used to download files from the internet —
+              a well-known Living Off the Land Binary and Script (LOLBAS) technique.
+              certutil is a legitimate Windows certificate utility but its -urlcache
+              and -split flags allow it to download arbitrary files while appearing
+              as a trusted system binary. Commonly used by phishing payloads to
+              fetch stage 2 binaries after initial execution.
+              Validated against Tempest campaign — certutil used to download
+              first.exe from phishteam[.]xyz as stage 2 C2 binary.
+
+--- SEARCH ---
+
+index=sysmon EventCode=1 Image="*certutil.exe*"
+| where like(CommandLine, "%-urlcache%")
+    OR like(CommandLine, "%-split%")
+    OR like(CommandLine, "%-f %http%")
+    OR like(CommandLine, "%-decode%")
+| eval download_indicator=if(like(CommandLine, "%http%"), "Yes", "No")
+| eval decode_indicator=if(like(CommandLine, "%-decode%"), "Yes", "No")
+| eval alert="certutil LOLBAS Abuse Detected"
+| eval severity=if(download_indicator="Yes", "High", "Medium")
+| table _time, host, User, CommandLine, ParentImage, download_indicator, decode_indicator, alert, severity
+
+--- TUNING NOTES ---
+
+False Positives:
+- PKI administrators using certutil for legitimate certificate management
+  (suppress by known admin account names or specific certificate-related flags)
+- Software deployment that uses certutil for certificate verification
+
+Suppression Example:
+| where NOT like(CommandLine, "%\\\\pki\\\\%")
+| where NOT User IN ("pki-admin", "svc-pki")
+
+LOLBAS Flag Reference for certutil:
+- -urlcache -split -f <URL> <output>  : Download file from URL
+- -decode <input> <output>            : Base64 decode a file
+- -encode <input> <output>            : Base64 encode a file (less common in attacks)
+
+Key Context:
+- certutil downloads are written to the URL cache AND the specified output path
+- The URL cache location: %LOCALAPPDATA%\Microsoft\Windows\INetCache\IE\
+- Sysmon EID 11 (file created) for the output file confirms successful download
+- Network connection (EID 3) from certutil.exe to external IP confirms live download
+
+Recommended Mitigation:
+- Block certutil.exe from making outbound internet connections via Windows Firewall
+  or application control policy — legitimate PKI use does not require
+  downloading arbitrary files from public URLs
